@@ -1,13 +1,17 @@
+from django.db import transaction
+
+from store.helpers import create_order_item
+from store.serializers import CustomerSerializer, OrderSerializer
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import PageNumberPagination
 from django.utils.decorators import method_decorator
-from store.serializers import CustomerSerializer
-from rest_framework import viewsets
 from rest_framework.response import Response
-from django.views import generic
+from store.models import Customer, Order
+from rest_framework import mixins, status
+from rest_framework import viewsets
+from django.db import DatabaseError
 from rest_framework import generics
-from rest_framework import mixins
-from store.models import Customer
+from django.views import generic
 
 from functools import wraps
 
@@ -23,11 +27,26 @@ def custom_response_format(view_func):
         try:
             if isinstance(response, Response):
                 print("RESPONSE : ", response.data)
+                print("RESPONSE STATUS CODE : ", response.status_code, response.status_text)
                 print("REQUEST METHOD : ", args[0].method)
                 if args[0].method == 'GET':
                     try:
-                        response.data.get('results', [])
-                        return response
+                        if response.data.get('results'):
+                            return response
+                        if isinstance(response.data, dict) and 'pk' in kwargs:
+                            response.data = {
+                                'count': 0 if response.status_code == status.HTTP_404_NOT_FOUND else 1,
+                                'next': None,
+                                'previous': None,
+                                'results': response.data,
+                            }
+                        if isinstance(response.data, list):
+                            response.data = {
+                                'count': len(response.data),
+                                'next': None,
+                                'previous': None,
+                                'results': response.data,
+                            }
                     except AttributeError:
                         response.data = {
                             'count': len(response.data),
@@ -39,15 +58,18 @@ def custom_response_format(view_func):
                     for key, value in response.data.items():
                         print(f"KEY AND VALUE IS {key} || {value}")
                     response.data = {
+                        'message': "Record created successfully." if response.status_code == status.HTTP_201_CREATED else "Record not found.",
                         'results': response.data,
                     }
                 if args[0].method in ['PUT', 'PATCH']:
                     response.data = {
+                        'message': "Record updated successfully." if response.status_code == status.HTTP_200_OK else "Record not found.",
                         'results': response.data,
                     }
                 if args[0].method == 'DELETE':
                     response.data = {
-                        'results': response.data,
+                        'message': "Record deleted successfully." if response.status_code == status.HTTP_204_NO_CONTENT else "Record not found.",
+                        'results': {},
                     }
             return response
         except Exception as e:
@@ -118,7 +140,9 @@ class CustomerDeleteModelMixin(mixins.DestroyModelMixin, generics.GenericAPIView
 
 
 @method_decorator(custom_response_format, name='dispatch')
-class CustomerAllModelMixins(viewsets.ModelViewSet):
+class CustomerAllModelMixins(mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                             mixins.CreateModelMixin, mixins.UpdateModelMixin,
+                             mixins.DestroyModelMixin, generics.GenericAPIView):
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
     pagination_class = CustomPageNumberPagination
@@ -144,7 +168,37 @@ class CustomerAllModelMixins(viewsets.ModelViewSet):
         return self.destroy(request, *args, **kwargs)
 
 
-class CustomerListApiView(generics.ListCreateAPIView, generics.GenericAPIView):
-    queryset = Customer.objects.all()
-    serializer_class = CustomerSerializer
+@method_decorator(custom_response_format, name='dispatch')
+class OrderAllModelMixins(mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                          mixins.CreateModelMixin, mixins.UpdateModelMixin,
+                          mixins.DestroyModelMixin, generics.GenericAPIView):
+    serializer_class = OrderSerializer
     pagination_class = CustomPageNumberPagination
+    filter_backends = [SearchFilter, OrderingFilter]
+    ordering_fields = ['id']
+    search_fields = ['id', 'customer__first_name', 'customer__last_name']
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        request.data['customer'] = self.request.query_params.get('customer_id')
+
+    def get_queryset(self):
+        queryset = Order.objects.filter(customer_id=self.request.query_params.get('customer_id'))
+        return queryset
+
+    def get(self, request, *args, **kwargs):
+        if 'pk' in kwargs:
+            return self.retrieve(request, *args, **kwargs)
+        return self.list(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
+
+    def put(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        return self.partial_update(request, *args, **kwargs)
+
+    def delete(self, request, *args, **kwargs):
+        return self.destroy(request, *args, **kwargs)
