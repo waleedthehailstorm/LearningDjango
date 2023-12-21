@@ -26,7 +26,7 @@ class OrderSerializer(ModelSerializer):
         order_items = validated_data.pop('order_items')
         order = Order.objects.create(**validated_data)
         for item in order_items:
-            OrderItem.objects.create(order=item, **item)
+            OrderItem.objects.create(order=order, **item)
         return order
 
     def update(self, instance, validated_data):

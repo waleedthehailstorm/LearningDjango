@@ -1,18 +1,11 @@
-from django.db import transaction
-
-from store.helpers import create_order_item
 from store.serializers import CustomerSerializer, OrderSerializer
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import PageNumberPagination
 from django.utils.decorators import method_decorator
 from rest_framework.response import Response
-from store.models import Customer, Order
 from rest_framework import mixins, status
-from rest_framework import viewsets
-from django.db import DatabaseError
+from store.models import Customer, Order
 from rest_framework import generics
-from django.views import generic
-
 from functools import wraps
 
 
@@ -28,7 +21,8 @@ def custom_response_format(view_func):
             if isinstance(response, Response):
                 print("RESPONSE : ", response.data)
                 print("RESPONSE STATUS CODE : ", response.status_code, response.status_text)
-                print("REQUEST METHOD : ", args[0].method)
+                if response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR:
+                    return response
                 if args[0].method == 'GET':
                     try:
                         if response.data.get('results'):
@@ -74,9 +68,11 @@ def custom_response_format(view_func):
             return response
         except Exception as e:
             print("CUSTOM RESPONSE FORMAT EXC : ", e)
-            response.data = {'error': 'Something went wrong'}
+            response.data = {
+                'message': "Something went wrong",
+                'results': {},
+            }
             return response
-
     return wrapper
 
 
@@ -177,6 +173,15 @@ class OrderAllModelMixins(mixins.ListModelMixin, mixins.RetrieveModelMixin,
     filter_backends = [SearchFilter, OrderingFilter]
     ordering_fields = ['id']
     search_fields = ['id', 'customer__first_name', 'customer__last_name']
+
+    def handle_exception(self, exc):
+        if isinstance(exc, Exception):
+            message = {
+                'message': "Something went wrong",
+                'results': {},
+            }
+            print("ORDER EXC : ", exc)
+            return Response(message, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
